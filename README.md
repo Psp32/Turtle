@@ -36,6 +36,21 @@ Commit `module/spacetime.json` and the Rust sources; do **not** commit `module/s
 
 Status strings are stored as plain text (e.g. `online`, `pending`, `blocked`, `allowed`) so the web client stays simple.
 
+## Gemini command decomposition
+
+Service: `mobile/src/services/gemini.ts` — `decomposeCommand(input, fleetStatus)` uses a **fleet profile** (CPU %, memory %, `installed_apps`, online/offline) so Gemini picks **`target_pc_id` per sub-task**. `synthesizeResults(results[])` turns multi-PC execution snippets into one short summary (structured JSON `{ summary }` from Gemini). `buildSynthesisPrompt(results)` is exposed for tests/debugging.
+
+```bash
+npm install
+npm test                    # always runs (Gemini is mocked; no API key required)
+npm run test:live           # optional: real Gemini (`vitest.live.config.ts`); needs GEMINI_API_KEY
+npm run gemini:demo -- "your command"
+```
+
+Test sources under `mobile/src/**/__tests__/` and `*.test.ts` are **committed**; `.gitignore` only drops **coverage** and **build** folders (e.g. `dist/`, `.next/`, `out/`).
+
+`FleetPcSnapshot` (`mobile/src/types/fleet.ts`) matches `PcAgent` fields; map rows from the SpacetimeDB client when you connect the UI.
+
 ## 📦 Setup
 
 1. Clone the repo
