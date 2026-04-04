@@ -1,9 +1,39 @@
+# Secrets — never commit real keys (templates like .env.example are tracked)
 .env
-spacetime.local.json
+.env.*
+!.env.example
 
-# Rust / SpacetimeDB build output
+# Dependencies
+node_modules/
+
+# Rust / SpacetimeDB WASM
 **/target/
 
-# Future web app
-node_modules/
+# SpacetimeDB CLI local state
+**/spacetime.local.json
+
+# Build & cache outputs
 dist/
+build/
+.next/
+out/
+.nuxt/
+.output/
+.svelte-kit/
+.vite/
+.parcel-cache/
+storybook-static/
+.turbo/
+*.tsbuildinfo
+
+# Tests
+coverage/
+*.lcov
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+Thumbs.db
+.DS_Store

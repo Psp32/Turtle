@@ -12,6 +12,7 @@ const quickCommands = [
 const baseDevices = [
   {
     id: 'node-alpha',
+    fleetNumericId: 1,
     name: 'OpenClaw Alpha',
     ip: '10.0.0.21',
     status: 'busy',
@@ -25,6 +26,7 @@ const baseDevices = [
   },
   {
     id: 'node-beta',
+    fleetNumericId: 2,
     name: 'OpenClaw Beta',
     ip: '10.0.0.34',
     status: 'online',
@@ -38,6 +40,7 @@ const baseDevices = [
   },
   {
     id: 'node-gamma',
+    fleetNumericId: 3,
     name: 'OpenClaw Gamma',
     ip: '10.0.0.52',
     status: 'online',
@@ -51,6 +54,7 @@ const baseDevices = [
   },
   {
     id: 'node-delta',
+    fleetNumericId: 4,
     name: 'OpenClaw Delta',
     ip: '10.0.0.70',
     status: 'offline',
@@ -191,6 +195,45 @@ function pickNode(devices, capability) {
   );
 
   return match ? match.id : devices.find((device) => device.status !== 'offline')?.id;
+}
+
+function devicesToFleetSnapshot(devices) {
+  return devices
+    .filter((device) => device.fleetNumericId != null)
+    .map((device) => ({
+      id: device.fleetNumericId,
+      hostname: device.name,
+      ip: device.ip,
+      status: device.status === 'offline' ? 'offline' : 'online',
+      cpuLoad: device.cpu,
+      memoryUsage: device.memory,
+      installedApps: '[]',
+    }));
+}
+
+function nodeIdForFleetPc(devices, targetPcId) {
+  if (targetPcId == null || targetPcId === undefined) {
+    return pickNode(devices, 'validation');
+  }
+  const n = Number(targetPcId);
+  const match = devices.find((d) => d.fleetNumericId === n);
+  return match ? match.id : pickNode(devices, 'validation');
+}
+
+function mapPlannerTasks(plan, devices) {
+  if (!plan?.tasks?.length) {
+    return [];
+  }
+  return plan.tasks.map((t) => ({
+    id: createId('gtask'),
+    title: `${t.type ?? 'task'}: ${String(t.command ?? '').slice(0, 48)}${
+      String(t.command ?? '').length > 48 ? '…' : ''
+    }`,
+    detail: String(t.command ?? ''),
+    capability: 'orchestration',
+    nodeId: nodeIdForFleetPc(devices, t.target_pc_id),
+    status: 'queued',
+  }));
 }
 
 function buildTaskPlan(commandText, devices) {
@@ -456,14 +499,53 @@ export function ControlCenterProvider({ children }) {
     return buildTaskPlan(commandText, devices);
   }
 
-  function launchCommand(commandText, inputMode = 'text') {
+  async function launchCommand(commandText, inputMode = 'text') {
     const trimmed = commandText.trim();
 
     if (!trimmed) {
       return null;
     }
 
-    const plan = buildTaskPlan(trimmed, devices);
+    const planLocal = buildTaskPlan(trimmed, devices);
+
+    let tasks = planLocal.tasks;
+    let previewText = planLocal.preview;
+    let completeSummary = planLocal.completeSummary;
+    let tags = planLocal.tags;
+
+    if (!planLocal.blocked) {
+      const baseUrl = import.meta.env.VITE_ORCHESTRATOR_API?.trim?.();
+      if (baseUrl) {
+        try {
+          const res = await fetch(`${baseUrl.replace(/\/$/, '')}/plan`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              rawInput: trimmed,
+              fleet: devicesToFleetSnapshot(devices),
+            }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const mapped = mapPlannerTasks(data.plan, devices);
+            if (mapped.length > 0) {
+              tasks = mapped;
+              previewText = `Gemini: ${mapped.length} subtask(s) (JSON matches SpacetimeDB submit_planned_session).`;
+              completeSummary =
+                'Decomposition finished. This session lists every sub-task for the command batch.';
+              tags = Array.from(new Set([...planLocal.tags, 'gemini']));
+            }
+          }
+        } catch (err) {
+          console.warn('Planner service unreachable; using local heuristic plan', err);
+        }
+      }
+    }
+
+    const plan = planLocal.blocked
+      ? planLocal
+      : { ...planLocal, tasks, preview: previewText, completeSummary, tags };
+
     const sessionId = createId('session');
     const commandSession = {
       id: sessionId,
@@ -478,14 +560,25 @@ export function ControlCenterProvider({ children }) {
       tags: plan.tags,
       clarification: plan.clarification,
       tasks: plan.tasks,
-      logs: [
-        {
-          id: createId('log'),
-          line: `Received ${inputMode} command from mobile bridge.`,
-          level: 'info',
-          timestamp: Date.now(),
-        },
-      ],
+      logs: (() => {
+        const rows = [
+          {
+            id: createId('log'),
+            line: `Received ${inputMode} command from mobile bridge.`,
+            level: 'info',
+            timestamp: Date.now(),
+          },
+        ];
+        if (!plan.blocked && plan.tags.includes('gemini')) {
+          rows.push({
+            id: createId('log'),
+            line: 'Gemini planner returned sub-tasks aligned with SpacetimeDB submit_planned_session.',
+            level: 'success',
+            timestamp: Date.now(),
+          });
+        }
+        return rows;
+      })(),
     };
 
     setSessions((currentSessions) => [commandSession, ...currentSessions]);
