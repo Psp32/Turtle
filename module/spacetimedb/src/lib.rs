@@ -154,6 +154,9 @@ pub fn send_heartbeat(
     memory_usage: f32,
     status: String,
 ) -> Result<(), String> {
+    if status.trim().is_empty() {
+        return Err("status is required".into());
+    }
     let Some(agent) = ctx.db.pc_agent().id().find(&pc_id) else {
         return Err("unknown pc_id".into());
     };
@@ -171,6 +174,10 @@ pub fn send_heartbeat(
 
 #[spacetimedb::reducer]
 pub fn submit_command(ctx: &ReducerContext, raw_input: String) -> Result<(), String> {
+    let raw_input = raw_input.trim().to_string();
+    if raw_input.is_empty() {
+        return Err("command cannot be empty".into());
+    }
     let now = ctx.timestamp;
 
     ctx.db.command_session().insert(CommandSession {
@@ -198,9 +205,17 @@ pub fn submit_command(ctx: &ReducerContext, raw_input: String) -> Result<(), Str
 
 #[spacetimedb::reducer]
 pub fn assign_task(ctx: &ReducerContext, task_id: u64, pc_id: u64) -> Result<(), String> {
+    ctx.db
+        .pc_agent()
+        .id()
+        .find(&pc_id)
+        .ok_or_else(|| "unknown pc_id".to_string())?;
     let Some(task) = ctx.db.task_queue().id().find(&task_id) else {
         return Err("unknown task_id".into());
     };
+    if task.status != "pending" {
+        return Err("only pending tasks can be assigned".into());
+    }
 
     ctx.db.task_queue().id().update(TaskQueue {
         assigned_pc_id: Some(pc_id),
@@ -213,6 +228,9 @@ pub fn assign_task(ctx: &ReducerContext, task_id: u64, pc_id: u64) -> Result<(),
 
 #[spacetimedb::reducer]
 pub fn update_task_status(ctx: &ReducerContext, task_id: u64, status: String) -> Result<(), String> {
+    if status.trim().is_empty() {
+        return Err("status is required".into());
+    }
     let Some(task) = ctx.db.task_queue().id().find(&task_id) else {
         return Err("unknown task_id".into());
     };
@@ -237,6 +255,16 @@ pub fn report_result(
     enforcement_decision: String,
     verification_token: String,
 ) -> Result<(), String> {
+    ctx.db
+        .task_queue()
+        .id()
+        .find(&task_id)
+        .ok_or_else(|| "unknown task_id".to_string())?;
+    ctx.db
+        .pc_agent()
+        .id()
+        .find(&pc_id)
+        .ok_or_else(|| "unknown pc_id".to_string())?;
     ctx.db.task_result().insert(TaskResult {
         id: 0,
         task_id,
@@ -262,6 +290,11 @@ pub fn log_enforcement(
     decision: String,
     reason: String,
 ) -> Result<(), String> {
+    ctx.db
+        .task_queue()
+        .id()
+        .find(&task_id)
+        .ok_or_else(|| "unknown task_id".to_string())?;
     ctx.db.enforcement_log().insert(EnforcementLog {
         id: 0,
         task_id,
