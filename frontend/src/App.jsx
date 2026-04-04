@@ -94,6 +94,29 @@ function fallbackSpeak(text, setAudioState) {
   window.speechSynthesis.speak(utterance);
 }
 
+async function processCommandAutomatically(transcript, setIsListening) {
+  setIsListening(false);
+  console.log("🎙️ Voice Captured: ", transcript);
+
+  try {
+    // 1. Send to Gemini
+    const geminiRes = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, 
+      {
+        contents: [{ parts: [{ text: `A user said: "${transcript}". Act as a distributed orchestrator. Explain in 2 sentences how you will divide this dataset across 3 nodes.` }] }]
+      }
+    );
+    console.log("🧠 Gemini Output:", geminiRes.data.candidates[0].content.parts[0].text);
+
+    // 2. Inject into SpacetimeDB
+    await axios.post(`${SPACETIMEDB_URI}/call/inject_tasks`, { args: [] });
+    console.log("✅ Pipeline automated successfully!");
+  } catch (error) {
+    console.error("❌ Automation error:", error);
+  }
+}
+
+
 function startVoiceCapture(setIsListening, setTranscript) {
   const SpeechRecognition =
     window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -109,11 +132,15 @@ function startVoiceCapture(setIsListening, setTranscript) {
   recognition.maxAlternatives = 1;
 
   recognition.onstart = () => setIsListening(true);
-  recognition.onresult = (event) => {
+    recognition.onresult = (event) => {
     const nextTranscript = event.results?.[0]?.[0]?.transcript || '';
     setTranscript(nextTranscript);
     console.log('User said:', nextTranscript);
+    
+    // THIS LINE IS THE MAGIC WIRING!
+    processCommandAutomatically(nextTranscript, setIsListening);
   };
+
   recognition.onerror = () => setIsListening(false);
   recognition.onend = () => setIsListening(false);
 
