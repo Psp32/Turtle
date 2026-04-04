@@ -5,7 +5,7 @@ import yaml
 import re
 import requests
 
-SPACETIMEDB_URI = "https://testnet.spacetimedb.com/database/fleet-control"
+SPACETIMEDB_URI = "https://testnet.spacetimedb.com/database/fleet-50e9n"
 PC_ID = socket.gethostname()
 
 def check_armorclaw_policy(command: str) -> dict:

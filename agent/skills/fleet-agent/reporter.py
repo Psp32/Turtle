@@ -1,7 +1,7 @@
 # reporter.py
 import requests
 
-SPACETIMEDB_URI = "https://testnet.spacetimedb.com/database/fleet-control"
+SPACETIMEDB_URI = "https://testnet.spacetimedb.com/database/fleet-50e9n"
 
 def push_result_to_db(task_id: int, result: dict, safety_check: dict):
     """Calls the report_result reducer in SpacetimeDB over HTTP."""
