@@ -1,15 +1,18 @@
-# --- Secrets & environment (never commit real keys) ---
+# Secrets — never commit real keys (templates like .env.example are tracked)
 .env
 .env.*
 !.env.example
 
-# --- SpacetimeDB local CLI state ---
-**/spacetime.local.json
-
-# --- Node ---
+# Dependencies
 node_modules/
 
-# Generic + framework build outputs (sources & **/*.test.ts stay committed)
+# Rust / SpacetimeDB WASM
+**/target/
+
+# SpacetimeDB CLI local state
+**/spacetime.local.json
+
+# Build & cache outputs
 dist/
 build/
 .next/
@@ -23,21 +26,14 @@ storybook-static/
 .turbo/
 *.tsbuildinfo
 
-# --- Rust / SpacetimeDB WASM build ---
-**/target/
-
-# --- Test artifacts only (all *.test.ts / __tests__ stay in git) ---
+# Tests
 coverage/
 *.lcov
 
-# --- Logs & debug ---
+# Logs
 *.log
 npm-debug.log*
 
-# --- OS ---
+# OS
 Thumbs.db
 .DS_Store
-
-# --- Optional: editor junk (uncomment if you do not commit IDE settings) ---
-# .idea/
-# .vscode/

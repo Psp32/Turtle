@@ -8,5 +8,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["mobile/src/**/*.ts", "vitest.config.ts"]
+  "include": ["mobile/src/**/*.ts", "server/**/*.ts", "vitest.config.ts", "vitest.live.config.ts"]
 }

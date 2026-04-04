@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import TaskTimeline from '../components/TaskTimeline';
@@ -30,6 +30,8 @@ function CommandPage() {
     transcript,
   } = useVoiceInput();
 
+  const [isSending, setIsSending] = useState(false);
+
   const preview = inspectCommand(commandDraft);
 
   useEffect(() => {
@@ -45,14 +47,21 @@ function CommandPage() {
     }
   }
 
-  function handleDispatch() {
-    const sessionId = launchCommand(commandDraft, transcript ? 'voice' : 'text');
-    if (!sessionId) {
+  async function handleDispatch() {
+    if (isSending) {
       return;
     }
-
-    resetTranscript();
-    navigate('/console');
+    setIsSending(true);
+    try {
+      const sessionId = await launchCommand(commandDraft, transcript ? 'voice' : 'text');
+      if (!sessionId) {
+        return;
+      }
+      resetTranscript();
+      navigate('/console');
+    } finally {
+      setIsSending(false);
+    }
   }
 
   return (
@@ -115,8 +124,12 @@ function CommandPage() {
                 : 'Speech recognition is unavailable in this browser, so text remains the fallback path.'}
             </p>
 
-            <button className="primary-button" onClick={handleDispatch}>
-              Send command
+            <button
+              className="primary-button"
+              onClick={() => void handleDispatch()}
+              disabled={isSending}
+            >
+              {isSending ? 'Planning…' : 'Send command'}
             </button>
           </div>
         </div>

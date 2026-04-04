@@ -8,9 +8,124 @@ import type { DecomposedPlan, TaskIntent } from '../types/intent';
 import type { PcExecutionSnippet } from '../types/synthesis';
 
 const DEFAULT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_BACKOFF_MS = 500;
+const DEFAULT_TIMEOUT_MS = 60_000;
+
+export type GeminiClientOptions = {
+  apiKey?: string;
+  model?: string;
+  /** Wall-clock cap per HTTP call (default 60s). */
+  timeoutMs?: number;
+  /** Network / API attempts with backoff (default 3). */
+  maxAttempts?: number;
+  /** Base backoff between attempts in ms (default 500; grows as 500, 1000, 2000, …). */
+  backoffMs?: number;
+};
 
 function pcId(agent: FleetPcSnapshot): number {
   return Number(agent.id);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label}: timeout after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<T>;
+}
+
+/** Retry on timeouts, rate limits, and transient server/network failures — not auth. */
+export function isRetryableGeminiError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const m = err.message.toLowerCase();
+  if (m.includes('401') || m.includes('403') || m.includes('permission denied')) {
+    return false;
+  }
+  if (m.includes('api key not valid') || m.includes('invalid api key')) {
+    return false;
+  }
+  if (m.includes('timeout after')) return true;
+  if (m.includes('fetch') || m.includes('network') || m.includes('econnreset')) return true;
+  if (m.includes('429') || m.includes('resource exhausted') || m.includes('rate')) return true;
+  if (m.includes('502') || m.includes('503') || m.includes('504')) return true;
+  if (err.name === 'AbortError') return true;
+  return false;
+}
+
+function extractBalanced(s: string, open: string, close: string): string | undefined {
+  const start = s.indexOf(open);
+  if (start === -1) return undefined;
+  let depth = 0;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (c === open) depth++;
+    else if (c === close) {
+      depth--;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  return undefined;
+}
+
+/** Parse model text: strict JSON, fenced ```json blocks, or first balanced `{…}` / `[…]`. */
+export function parseJsonLenient(text: string): unknown | undefined {
+  const t = text.trim();
+  try {
+    return JSON.parse(t) as unknown;
+  } catch {
+    /* continue */
+  }
+  const fenced = t.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) {
+    try {
+      return JSON.parse(fenced[1].trim()) as unknown;
+    } catch {
+      /* continue */
+    }
+  }
+  const objSlice = extractBalanced(t, '{', '}');
+  if (objSlice) {
+    try {
+      return JSON.parse(objSlice) as unknown;
+    } catch {
+      /* continue */
+    }
+  }
+  const arrSlice = extractBalanced(t, '[', ']');
+  if (arrSlice) {
+    try {
+      return JSON.parse(arrSlice) as unknown;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function fallbackDecomposePlan(input: string, fleet: FleetPcSnapshot[]): DecomposedPlan {
+  const online = fleet.filter((a) => a.status !== 'offline');
+  const pick = online[0];
+  const target = pick != null ? pcId(pick) : null;
+  return {
+    tasks: [{ type: 'task', target_pc_id: target, command: input, params: {} }],
+  };
+}
+
+function fallbackSynthesisSummary(results: PcExecutionSnippet[]): string {
+  return results
+    .map((r) => {
+      const host = r.hostname ? ` (${r.hostname})` : '';
+      const err = r.stderr?.trim() ? ` stderr=${JSON.stringify(r.stderr.slice(0, 160))}` : '';
+      return `pc_id=${r.pc_id}${host}: exit ${r.exit_code ?? 'unknown'}${err}`;
+    })
+    .join(' ');
 }
 
 function buildFleetContext(agents: FleetPcSnapshot[]): string {
@@ -112,6 +227,28 @@ function normalizeGeminiPlan(raw: unknown): unknown {
   };
 }
 
+async function generateContentOnce(
+  ai: GoogleGenAI,
+  model: string,
+  prompt: string,
+  jsonSchema: Record<string, unknown>,
+  timeoutMs: number
+): Promise<string> {
+  const response = await withTimeout(
+    ai.models.generateContent({
+      model,
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseJsonSchema: jsonSchema,
+      },
+    }),
+    timeoutMs,
+    'Gemini generateContent'
+  );
+  return extractText(response);
+}
+
 /**
  * Decompose a natural-language fleet command into structured tasks.
  * Uses Gemini structured JSON (`responseJsonSchema`) so output matches the schema.
@@ -119,7 +256,7 @@ function normalizeGeminiPlan(raw: unknown): unknown {
 export async function decomposeCommand(
   input: string,
   fleetStatus: FleetPcSnapshot[],
-  options?: { apiKey?: string; model?: string }
+  options?: GeminiClientOptions
 ): Promise<DecomposedPlan> {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -148,35 +285,44 @@ export async function decomposeCommand(
     `User command: ${JSON.stringify(trimmed)}`,
   ].join('\n');
 
-  const response = await ai.models.generateContent({
-    model,
-    contents: prompt,
-    config: {
-      responseMimeType: 'application/json',
-      responseJsonSchema: responseSchema,
-    },
-  });
+  const maxAttempts = options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const backoffMs = options?.backoffMs ?? DEFAULT_BACKOFF_MS;
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  const text = extractText(response);
-
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    throw new Error('Gemini response was not valid JSON');
-  }
-
-  raw = normalizeGeminiPlan(raw);
-
-  try {
-    return DecomposedPlanSchema.parse(raw) as DecomposedPlan;
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      const msg = err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-      throw new Error(`Invalid structured output: ${msg}`);
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const text = await generateContentOnce(ai, model, prompt, responseSchema, timeoutMs);
+      const rawParsed = parseJsonLenient(text);
+      if (rawParsed === undefined) {
+        if (i < maxAttempts - 1) {
+          await sleep(backoffMs * 2 ** i);
+          continue;
+        }
+        return fallbackDecomposePlan(trimmed, fleetStatus);
+      }
+      const raw = normalizeGeminiPlan(rawParsed);
+      const parsed = DecomposedPlanSchema.safeParse(raw);
+      if (parsed.success) {
+        return parsed.data as DecomposedPlan;
+      }
+      if (i < maxAttempts - 1) {
+        await sleep(backoffMs * 2 ** i);
+        continue;
+      }
+      return fallbackDecomposePlan(trimmed, fleetStatus);
+    } catch (e) {
+      if (!isRetryableGeminiError(e)) {
+        throw e;
+      }
+      if (i < maxAttempts - 1) {
+        await sleep(backoffMs * 2 ** i);
+        continue;
+      }
+      return fallbackDecomposePlan(trimmed, fleetStatus);
     }
-    throw err;
   }
+
+  return fallbackDecomposePlan(trimmed, fleetStatus);
 }
 
 export function selectOptimalPC(
@@ -242,7 +388,7 @@ export function buildSynthesisPrompt(results: PcExecutionSnippet[]): string {
  */
 export async function synthesizeResults(
   results: PcExecutionSnippet[],
-  options?: { apiKey?: string; model?: string }
+  options?: GeminiClientOptions
 ): Promise<string> {
   if (results.length === 0) {
     throw new Error('results must not be empty');
@@ -257,31 +403,46 @@ export async function synthesizeResults(
   const ai = new GoogleGenAI({ apiKey });
   const prompt = buildSynthesisPrompt(results);
 
-  const response = await ai.models.generateContent({
-    model,
-    contents: prompt,
-    config: {
-      responseMimeType: 'application/json',
-      responseJsonSchema: synthesisResponseSchema,
-    },
-  });
+  const maxAttempts = options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
+  const backoffMs = options?.backoffMs ?? DEFAULT_BACKOFF_MS;
 
-  const text = extractText(response);
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    throw new Error('Synthesis response was not valid JSON');
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const text = await generateContentOnce(ai, model, prompt, synthesisResponseSchema, timeoutMs);
+      const rawParsed = parseJsonLenient(text);
+      if (rawParsed === undefined) {
+        if (i < maxAttempts - 1) {
+          await sleep(backoffMs * 2 ** i);
+          continue;
+        }
+        return fallbackSynthesisSummary(results);
+      }
+      let raw: unknown = rawParsed;
+      if (typeof raw === 'string') {
+        raw = { summary: raw };
+      }
+      const parsed = SynthesisOutputSchema.safeParse(raw);
+      if (parsed.success) {
+        return parsed.data.summary;
+      }
+      if (i < maxAttempts - 1) {
+        await sleep(backoffMs * 2 ** i);
+        continue;
+      }
+      return fallbackSynthesisSummary(results);
+    } catch (e) {
+      if (!isRetryableGeminiError(e)) {
+        throw e;
+      }
+      if (i < maxAttempts - 1) {
+        await sleep(backoffMs * 2 ** i);
+        continue;
+      }
+      return fallbackSynthesisSummary(results);
+    }
   }
 
-  if (typeof raw === 'string') {
-    raw = { summary: raw };
-  }
-
-  const parsed = SynthesisOutputSchema.safeParse(raw);
-  if (!parsed.success) {
-    const msg = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-    throw new Error(`Invalid synthesis output: ${msg}`);
-  }
-  return parsed.data.summary;
+  return fallbackSynthesisSummary(results);
 }
