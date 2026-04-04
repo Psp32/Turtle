@@ -1,1 +1,9 @@
 .env
+spacetime.local.json
+
+# Rust / SpacetimeDB build output
+**/target/
+
+# Future web app
+node_modules/
+dist/
