@@ -1,0 +1,28 @@
+# agent/skills/fleet-agent/default.yaml
+name: "Fleet Control Strict Policy"
+mode: "enforce" # Use 'audit' to just log, 'enforce' to block
+
+rules:
+  # Block destructive file operations
+  - id: block-destructive-rm
+    type: regex
+    target: command
+    pattern: "rm\\s+-rf\\s+/(?!\\s)"
+    action: block
+    reason: "Attempted to delete root or sensitive system directories."
+
+  # Block modification of system32
+  - id: protect-system32
+    type: regex
+    target: command
+    pattern: "(?i)system32"
+    action: block
+    reason: "Commands targeting System32 are restricted."
+
+
+  - id: block-format
+    type: regex
+    target: command
+    pattern: "^format\\s+[a-zA-Z]:"
+    action: block
+    reason: "Drive formatting is prohibited via agent."
