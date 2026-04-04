@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  superplane-engine:
+    image: superplane/orchestrator:latest
+    ports:
+      - "8080:8080" # Canvas UI
+      - "9000:9000" # Webhook ingestion port
+    volumes:
+      - ./canvases:/app/canvases
+    environment:
+      - STDB_API_URL=https://testnet.spacetimedb.com/database/fleet-control
+      - SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR_WEBHOOK_HERE # Update later
