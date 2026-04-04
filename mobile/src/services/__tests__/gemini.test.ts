@@ -16,6 +16,8 @@ vi.mock('@google/genai', () => ({
 import {
   buildSynthesisPrompt,
   decomposeCommand,
+  isRetryableGeminiError,
+  parseJsonLenient,
   selectOptimalPC,
   synthesizeResults,
   validateDependencies,
@@ -25,6 +27,18 @@ import { mockMultiPcResults } from './fixtures/multi-pc-results';
 import type { TaskIntent } from '../../types/intent';
 
 describe('Gemini fleet service', () => {
+  describe('parseJsonLenient + isRetryableGeminiError', () => {
+    it('parses JSON inside a markdown fence', () => {
+      const raw = parseJsonLenient('```json\n{"tasks":[]}\n```');
+      expect(raw).toEqual({ tasks: [] });
+    });
+
+    it('treats 503 as retryable, 403 as not', () => {
+      expect(isRetryableGeminiError(new Error('upstream 503'))).toBe(true);
+      expect(isRetryableGeminiError(new Error('403 forbidden'))).toBe(false);
+    });
+  });
+
   describe('selectOptimalPC', () => {
     it('picks the online PC with lowest CPU when no app filter', () => {
       expect(selectOptimalPC('system_command', [], mockFleetStatus)).toBe(2);
@@ -126,6 +140,35 @@ describe('Gemini fleet service', () => {
       expect(result.tasks).toHaveLength(1);
       expect(result.tasks[0].command).toBe('echo ok');
     });
+
+    it('retries on retryable failures then succeeds', async () => {
+      mockGenerateContent
+        .mockRejectedValueOnce(new Error('503 unavailable'))
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            tasks: [{ type: 'shell', target_pc_id: 1, command: 'ok', params: {} }],
+          }),
+        });
+
+      const result = await decomposeCommand('retry me', mockFleetStatus, {
+        maxAttempts: 3,
+        backoffMs: 1,
+      });
+      expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+      expect(result.tasks[0].command).toBe('ok');
+    });
+
+    it('falls back to a single task after bad JSON responses', async () => {
+      mockGenerateContent.mockResolvedValue({ text: 'not valid json {{{' });
+
+      const result = await decomposeCommand('do something', mockFleetStatus, {
+        maxAttempts: 2,
+        backoffMs: 1,
+      });
+      expect(result.tasks).toHaveLength(1);
+      expect(result.tasks[0].command).toBe('do something');
+      expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('synthesizeResults (mocked Gemini)', () => {
@@ -153,6 +196,17 @@ describe('Gemini fleet service', () => {
 
       const summary = await synthesizeResults(mockMultiPcResults);
       expect(summary).toBe('Plain summary line from model.');
+    });
+
+    it('falls back to deterministic text when JSON stays invalid', async () => {
+      mockGenerateContent.mockResolvedValue({ text: '%%%' });
+
+      const summary = await synthesizeResults(mockMultiPcResults, {
+        maxAttempts: 2,
+        backoffMs: 1,
+      });
+      expect(summary).toContain('pc_id=');
+      expect(summary).toContain('exit');
     });
   });
 });
