@@ -1,4 +1,4 @@
-﻿@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@500;600;700;800&display=swap');
 
 :root {
   color-scheme: dark;
@@ -801,6 +801,73 @@ h3 {
 .meta-grid {
   gap: 18px;
 }
+
+/* --- AI Terminal Styling --- */
+.terminal-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-window {
+  flex-grow: 1;
+  margin: 16px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 12px;
+  padding: 16px;
+  overflow-y: auto;
+  max-height: 250px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.terminal-window::-webkit-scrollbar {
+  width: 6px;
+}
+.terminal-window::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+}
+
+.terminal-empty {
+  color: var(--muted);
+  font-style: italic;
+  text-align: center;
+  margin: auto;
+}
+
+.terminal-log-line {
+  display: flex;
+  gap: 10px;
+  word-break: break-word;
+}
+
+.log-timestamp {
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.log-tag {
+  font-weight: bold;
+  flex-shrink: 0;
+}
+
+.tag-system { color: var(--cyan); }
+.tag-gemini { color: var(--violet); }
+.tag-orchestrator { color: var(--amber); }
+.tag-error { color: var(--danger); }
+
+.log-text {
+  color: #e2e8f0;
+}
+
+.log-working .log-text { color: #94a3b8; }
+.log-success .log-text { color: var(--mint); }
+.log-error .log-text { color: var(--danger); }
 
 @keyframes haloPulse {
   0% {

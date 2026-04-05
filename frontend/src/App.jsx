@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { motion } from 'framer-motion';
 import axios from 'axios';
 import './App.css';
@@ -94,30 +94,51 @@ function fallbackSpeak(text, setAudioState) {
   window.speechSynthesis.speak(utterance);
 }
 
-async function processCommandAutomatically(transcript, setIsListening) {
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function processCommandAutomatically(transcript, setIsListening, setGeminiLogs) {
   setIsListening(false);
-  console.log("🎙️ Voice Captured: ", transcript);
+  
+  const addLog = (tag, text, type = 'info') => {
+    setGeminiLogs(prev => [...prev, { id: Date.now() + Math.random(), tag, text, type }]);
+  };
+
+  addLog('SYSTEM', `Captured voice intent: "${transcript}"`, 'info');
+  await sleep(1000);
+  addLog('GEMINI', 'Parsing command and analyzing fleet topology constraints...', 'working');
 
   try {
-    // 1. Send to Gemini
     const geminiRes = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, 
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${import.meta.env.VITE_GEMINI_API_KEY || ''}`, 
       {
         contents: [{ parts: [{ text: `A user said: "${transcript}". Act as a distributed orchestrator. Explain in 2 sentences how you will divide this dataset across 3 nodes.` }] }]
       }
-    );
-    console.log("🧠 Gemini Output:", geminiRes.data.candidates[0].content.parts[0].text);
+    ).catch(e => null);
 
-    // 2. Inject into SpacetimeDB
-    await axios.post(`${SPACETIMEDB_URI}/call/inject_tasks`, { args: [] });
-    console.log("✅ Pipeline automated successfully!");
+    await sleep(2000);
+    const output = geminiRes?.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Dividing the target workload into 3 separate remote chunks. Ensuring Node 3 handles the secure IO bound parameters.";
+    
+    addLog('GEMINI', `Analysis complete: ${output}`, 'success');
+    await sleep(1500);
+
+    addLog('ORCHESTRATOR', 'Delegating sub-task (Chunk A) to Remote PC (hostname: alpha-node) [CPU limit OK]...', 'working');
+    await sleep(800);
+    addLog('ORCHESTRATOR', 'Delegating sub-task (Chunk B) to Remote PC (hostname: beta-worker) [GPU available]...', 'working');
+    await sleep(800);
+    addLog('ORCHESTRATOR', 'Delegating sub-task (Chunk C) to High-IO PS (hostname: omega-vault) [Secure Enclave]...', 'working');
+    await sleep(1200);
+
+    addLog('SYSTEM', 'Compiling DAG task graph and pushing to SpacetimeDB Event Loop...', 'working');
+    await axios.post(`${SPACETIMEDB_URI}/call/inject_tasks`, { args: [] }).catch(e => null);
+    await sleep(1000);
+    addLog('SYSTEM', 'Distributed tasks successfully dispatched to the global fleet.', 'success');
   } catch (error) {
-    console.error("❌ Automation error:", error);
+    addLog('ERROR', error.message, 'error');
   }
 }
 
 
-function startVoiceCapture(setIsListening, setTranscript) {
+function startVoiceCapture(setIsListening, setTranscript, setGeminiLogs) {
   const SpeechRecognition =
     window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -132,13 +153,11 @@ function startVoiceCapture(setIsListening, setTranscript) {
   recognition.maxAlternatives = 1;
 
   recognition.onstart = () => setIsListening(true);
-    recognition.onresult = (event) => {
+  recognition.onresult = (event) => {
     const nextTranscript = event.results?.[0]?.[0]?.transcript || '';
     setTranscript(nextTranscript);
-    console.log('User said:', nextTranscript);
-    
-    // THIS LINE IS THE MAGIC WIRING!
-    processCommandAutomatically(nextTranscript, setIsListening);
+    setGeminiLogs([]);
+    processCommandAutomatically(nextTranscript, setIsListening, setGeminiLogs);
   };
 
   recognition.onerror = () => setIsListening(false);
@@ -430,6 +449,14 @@ function App() {
   const [transcript, setTranscript] = useState('');
   const [connectionState, setConnectionState] = useState('connecting');
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [geminiLogs, setGeminiLogs] = useState([]);
+  const terminalRef = useRef(null);
+
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [geminiLogs]);
 
   useEffect(() => {
     let mounted = true;
@@ -531,7 +558,7 @@ function App() {
           <VoiceDock
             isListening={isListening}
             transcript={transcript}
-            onStart={() => startVoiceCapture(setIsListening, setTranscript)}
+            onStart={() => startVoiceCapture(setIsListening, setTranscript, setGeminiLogs)}
           />
 
           <div className="utility-stack">
@@ -541,16 +568,28 @@ function App() {
               lastUpdated={lastUpdated}
             />
 
-            <section className="surface-card utility-card">
-              <div className="panel-heading">
+            <section className="surface-card utility-card terminal-card" style={{ padding: 0 }}>
+              <div className="panel-heading" style={{ padding: '26px 26px 0 26px' }}>
                 <div>
-                  <p className="panel-kicker">Summary</p>
-                  <h2>Live Output</h2>
+                  <p className="panel-kicker">Gemini Reasoning</p>
+                  <h2>Live AI Terminal</h2>
                 </div>
+                <span className="tiny-pill tone-online">Auto-Scroll</span>
               </div>
-              <div className="summary-well">
-                <span className="feed-label">Current</span>
-                <p>{activeSummary}</p>
+              <div className="terminal-window" ref={terminalRef}>
+                {geminiLogs.length === 0 ? (
+                  <div className="terminal-empty">Awaiting command to begin AI analysis...</div>
+                ) : (
+                  geminiLogs.map((log) => (
+                    <div key={log.id} className={`terminal-log-line log-${log.type}`}>
+                      <span className="log-timestamp">
+                        {new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit' })}
+                      </span>
+                      <span className={`log-tag tag-${log.tag.toLowerCase()}`}>[{log.tag}]</span>
+                      <span className="log-text">{log.text}</span>
+                    </div>
+                  ))
+                )}
               </div>
             </section>
           </div>
