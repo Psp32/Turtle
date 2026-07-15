@@ -1,17 +1,13 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { motion } from 'framer-motion';
-import axios from 'axios';
 import './App.css';
 
-const SPACETIMEDB_URI =
-  import.meta.env.VITE_SPACETIMEDB_URI ||
-  'https://testnet.spacetimedb.com/database/fleet-control';
-const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY || '';
-const ELEVENLABS_VOICE_ID =
-  import.meta.env.VITE_ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
 const FINALE_TEXT =
-  import.meta.env.VITE_FINALE_TEXT ||
   'Model training complete. Distributed across 3 nodes, time saved: 20 minutes. Final federated accuracy is 94.2 percent.';
+const DEMO_SOURCE = 'Frontend-only mock pipeline';
+
+const MOCK_ELEVENLABS_OUTPUT =
+  'ElevenLabs output (mock): The command has been accepted. Node one preprocesses local samples, node two runs gradient updates, node three validates consensus, and the aggregator is preparing the narrated final summary.';
 
 const CARD_LAYOUT = [
   { id: 1, title: 'Chunk A', subtitle: 'Node 1 · Local shard', accent: 'cyan' },
@@ -96,15 +92,13 @@ function fallbackSpeak(text, setAudioState) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function processCommandAutomatically(transcript, setIsListening, setGeminiLogs) {
-  setIsListening(false);
-  
+async function processCommandAutomatically(transcript, setGeminiLogs) {
   const addLog = (tag, text, type = 'info') => {
     setGeminiLogs(prev => [...prev, { id: Date.now() + Math.random(), tag, text, type }]);
   };
 
   addLog('SYSTEM', `Captured voice intent: "${transcript}"`, 'info');
-  await sleep(1000);
+  await sleep(600);
   addLog('GEMINI', 'Parsing command and analyzing fleet topology constraints...', 'working');
 
   try {
@@ -115,35 +109,33 @@ async function processCommandAutomatically(transcript, setIsListening, setGemini
       }
     ).catch(e => null);
 
-    await sleep(2000);
+    await sleep(800);
     const output = geminiRes?.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Dividing the target workload into 3 separate remote chunks. Ensuring Node 3 handles the secure IO bound parameters.";
     
     addLog('GEMINI', `Analysis complete: ${output}`, 'success');
-    await sleep(1500);
+    await sleep(600);
 
     addLog('ORCHESTRATOR', 'Delegating sub-task (Chunk A) to Remote PC (hostname: alpha-node) [CPU limit OK]...', 'working');
-    await sleep(800);
+    await sleep(600);
     addLog('ORCHESTRATOR', 'Delegating sub-task (Chunk B) to Remote PC (hostname: beta-worker) [GPU available]...', 'working');
-    await sleep(800);
+    await sleep(600);
     addLog('ORCHESTRATOR', 'Delegating sub-task (Chunk C) to High-IO PS (hostname: omega-vault) [Secure Enclave]...', 'working');
-    await sleep(1200);
+    await sleep(600);
 
     addLog('SYSTEM', 'Compiling DAG task graph and pushing to SpacetimeDB Event Loop...', 'working');
-    await axios.post(`${SPACETIMEDB_URI}/call/inject_tasks`, { args: [] }).catch(e => null);
-    await sleep(1000);
+    await sleep(600);
     addLog('SYSTEM', 'Distributed tasks successfully dispatched to the global fleet.', 'success');
   } catch (error) {
     addLog('ERROR', error.message, 'error');
   }
 }
 
-
-function startVoiceCapture(setIsListening, setTranscript, setGeminiLogs) {
+function startVoiceCapture(setIsListening, onCapturedTranscript) {
   const SpeechRecognition =
     window.SpeechRecognition || window.webkitSpeechRecognition;
 
   if (!SpeechRecognition) {
-    window.alert('Speech recognition not supported in this browser. Please use Chrome.');
+    onCapturedTranscript('Start distributed training workflow.');
     return;
   }
 
@@ -155,9 +147,8 @@ function startVoiceCapture(setIsListening, setTranscript, setGeminiLogs) {
   recognition.onstart = () => setIsListening(true);
   recognition.onresult = (event) => {
     const nextTranscript = event.results?.[0]?.[0]?.transcript || '';
-    setTranscript(nextTranscript);
-    setGeminiLogs([]);
-    processCommandAutomatically(nextTranscript, setIsListening, setGeminiLogs);
+    onCapturedTranscript(nextTranscript);
+    console.log('User said:', nextTranscript);
   };
 
   recognition.onerror = () => setIsListening(false);
@@ -171,55 +162,11 @@ async function playElevenLabsAudio(textToSpeak, setAudioState) {
     return;
   }
 
-  if (!ELEVENLABS_API_KEY) {
+  setAudioState('arming');
+  window.setTimeout(() => {
+    setAudioState('playing');
     fallbackSpeak(textToSpeak, setAudioState);
-    return;
-  }
-
-  try {
-    setAudioState('arming');
-    const response = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
-      {
-        method: 'POST',
-        headers: {
-          'xi-api-key': ELEVENLABS_API_KEY,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          text: textToSpeak,
-          model_id: 'eleven_monolingual_v1',
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.5,
-          },
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`ElevenLabs returned ${response.status}`);
-    }
-
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio.onplay = () => setAudioState('playing');
-    audio.onended = () => {
-      setAudioState('complete');
-      URL.revokeObjectURL(url);
-    };
-    audio.onerror = () => {
-      setAudioState('fallback');
-      URL.revokeObjectURL(url);
-      fallbackSpeak(textToSpeak, setAudioState);
-    };
-    await audio.play();
-  } catch (error) {
-    console.error('ElevenLabs failed:', error);
-    setAudioState('fallback');
-    fallbackSpeak(textToSpeak, setAudioState);
-  }
+  }, 450);
 }
 
 function MicGlyph() {
@@ -366,14 +313,14 @@ function AudioPanel({ audioState, hasPlayedAudio, lastUpdated }) {
         </div>
         <div className="data-block">
           <span className="feed-label">Mode</span>
-          <p>{ELEVENLABS_API_KEY ? 'ElevenLabs API' : 'Browser fallback'}</p>
+          <p>ElevenLabs (mock)</p>
         </div>
       </div>
     </section>
   );
 }
 
-function VoiceDock({ isListening, transcript, onStart }) {
+function VoiceDock({ isListening, transcript, onStart, onRunDemo }) {
   return (
     <section className="surface-card voice-dock">
       <div className="voice-copy">
@@ -393,6 +340,9 @@ function VoiceDock({ isListening, transcript, onStart }) {
           </p>
           <div className="voice-helper-row">
             <span className="tiny-pill">Mobile ready</span>
+            <button type="button" className="tiny-pill" onClick={onRunDemo}>
+              Run demo output
+            </button>
           </div>
         </div>
 
@@ -447,7 +397,7 @@ function App() {
   const [hasPlayedAudio, setHasPlayedAudio] = useState(false);
   const [audioState, setAudioState] = useState('idle');
   const [transcript, setTranscript] = useState('');
-  const [connectionState, setConnectionState] = useState('connecting');
+  const [connectionState, setConnectionState] = useState('demo');
   const [lastUpdated, setLastUpdated] = useState(null);
   const [geminiLogs, setGeminiLogs] = useState([]);
   const terminalRef = useRef(null);
@@ -458,39 +408,121 @@ function App() {
     }
   }, [geminiLogs]);
 
+  const [mockOutput, setMockOutput] = useState('Waiting for a command.');
+
+  function runMockWorkflow(commandText) {
+    const command = String(commandText || '').trim() || 'Start distributed training workflow.';
+    setTranscript(command);
+    setConnectionState('demo');
+    setHasPlayedAudio(false);
+    setAudioState('idle');
+    setMockOutput('Routing command to workflow engine (mock)...');
+    setLastUpdated(Date.now());
+
+    setTasks([
+      {
+        id: 1,
+        taskType: 'prepare_chunk',
+        targetNode: 'node-1',
+        status: 'queued',
+        summary: `Input received: "${command}"`,
+      },
+      {
+        id: 2,
+        taskType: 'train_local_model',
+        targetNode: 'node-2',
+        status: 'assigned',
+        summary: 'Local trainer standing by.',
+      },
+      {
+        id: 3,
+        taskType: 'validate_updates',
+        targetNode: 'node-3',
+        status: 'pending',
+        summary: 'Validation queue initialized.',
+      },
+      {
+        id: 4,
+        taskType: 'aggregate_and_narrate',
+        targetNode: 'node-4',
+        status: 'queued',
+        summary: 'Aggregator waiting for shard results.',
+      },
+    ]);
+
+    window.setTimeout(() => {
+      setTasks([
+        {
+          id: 1,
+          taskType: 'prepare_chunk',
+          targetNode: 'node-1',
+          status: 'running',
+          summary: 'Chunk A preprocessing in progress.',
+        },
+        {
+          id: 2,
+          taskType: 'train_local_model',
+          targetNode: 'node-2',
+          status: 'running',
+          summary: 'Node 2 executing gradient updates.',
+        },
+        {
+          id: 3,
+          taskType: 'validate_updates',
+          targetNode: 'node-3',
+          status: 'validating',
+          summary: 'Cross-node consistency check active.',
+        },
+        {
+          id: 4,
+          taskType: 'aggregate_and_narrate',
+          targetNode: 'node-4',
+          status: 'running',
+          summary: 'Aggregator merging distributed output.',
+        },
+      ]);
+      setMockOutput('Workflow in motion. Nodes are processing in parallel (mock).');
+      setLastUpdated(Date.now());
+    }, 900);
+
+    window.setTimeout(() => {
+      setTasks([
+        {
+          id: 1,
+          taskType: 'prepare_chunk',
+          targetNode: 'node-1',
+          status: 'done',
+          summary: 'Chunk A preprocessed and uploaded.',
+        },
+        {
+          id: 2,
+          taskType: 'train_local_model',
+          targetNode: 'node-2',
+          status: 'done',
+          summary: 'Node 2 local training complete.',
+        },
+        {
+          id: 3,
+          taskType: 'validate_updates',
+          targetNode: 'node-3',
+          status: 'done',
+          summary: 'Validation complete and approved.',
+        },
+        {
+          id: 4,
+          taskType: 'aggregate_and_narrate',
+          targetNode: 'node-4',
+          status: 'done',
+          summary: MOCK_ELEVENLABS_OUTPUT,
+        },
+      ]);
+      setMockOutput(MOCK_ELEVENLABS_OUTPUT);
+      setLastUpdated(Date.now());
+    }, 4000);
+  }
+
   useEffect(() => {
-    let mounted = true;
-
-    const fetchTasks = async () => {
-      try {
-        const res = await axios.post(`${SPACETIMEDB_URI}/sql`, {
-          query: 'SELECT * FROM TaskQueue',
-        });
-
-        if (!mounted) {
-          return;
-        }
-
-        setTasks(normalizeTaskRows(res.data));
-        setConnectionState('online');
-        setLastUpdated(Date.now());
-      } catch (error) {
-        if (!mounted) {
-          return;
-        }
-
-        console.error('SpacetimeDB offline.', error);
-        setConnectionState('offline');
-      }
-    };
-
-    fetchTasks();
-    const interval = window.setInterval(fetchTasks, 1000);
-
-    return () => {
-      mounted = false;
-      window.clearInterval(interval);
-    };
+    runMockWorkflow('Demo startup command from control center.');
   }, []);
 
   const aggregateTask = useMemo(() => tasks.find((task) => task.id === 4), [tasks]);
@@ -519,7 +551,7 @@ function App() {
     ['queued', 'pending', 'assigned', 'validating'].includes(task.status)
   ).length;
   const successRate = tasks.length ? Math.round((completedCount / tasks.length) * 100) : 0;
-  const activeSummary = aggregateTask?.summary || transcript || 'Awaiting a live command.';
+  const activeSummary = aggregateTask?.summary || mockOutput || transcript || 'Awaiting a live command.';
 
   return (
     <div className="dashboard-shell">
@@ -558,7 +590,19 @@ function App() {
           <VoiceDock
             isListening={isListening}
             transcript={transcript}
-            onStart={() => startVoiceCapture(setIsListening, setTranscript, setGeminiLogs)}
+            onStart={() => startVoiceCapture(setIsListening, (transcript) => {
+              setIsListening(false);
+              setGeminiLogs([]);
+              runMockWorkflow(transcript);
+              processCommandAutomatically(transcript, setGeminiLogs);
+            })}
+            onRunDemo={() => {
+              setIsListening(false);
+              setGeminiLogs([]);
+              const text = 'Start distributed training workflow.';
+              runMockWorkflow(text);
+              processCommandAutomatically(text, setGeminiLogs);
+            }}
           />
 
           <div className="utility-stack">
@@ -639,12 +683,12 @@ function App() {
           <div className="meta-grid">
             <section className="surface-card meta-card">
               <span className="feed-label">Source</span>
-              <p>{SPACETIMEDB_URI}</p>
+              <p>{DEMO_SOURCE}</p>
             </section>
 
             <section className="surface-card meta-card">
-              <span className="feed-label">Transcript</span>
-              <p>{transcript || 'No command captured yet.'}</p>
+              <span className="feed-label">ElevenLabs Output</span>
+              <p>{mockOutput}</p>
             </section>
           </div>
         </section>
